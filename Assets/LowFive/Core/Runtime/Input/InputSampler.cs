@@ -1,33 +1,36 @@
+﻿// Assets/LowFive/Core/Runtime/Input/InputSampler.cs
 using UnityEngine;
 
 namespace LowFive.Core.Input
 {
     /// <summary>
     /// Collects Unity input each frame and produces a 64-bit LFInputStruct.
-    /// In Core this feeds CoreNetManager; for now we just Debug-log it.
+    /// CoreNetManager reads <see cref="Current"/> once per simulation tick.
     /// </summary>
     public sealed class InputSampler : MonoBehaviour
     {
-        public LFInputStruct Current { get; private set; }   // exposed for Inspector watch
+        public LFInputStruct Current { get; private set; }
 
-        /// <summary>Call this once per simulation tick to get a fresh snapshot.</summary>
+        /// <summary>Updates <see cref="Current"/> and returns the new value.</summary>
         public LFInputStruct ReadCurrent()
         {
             var i = new LFInputStruct();
 
-            // --- digital buttons (8 bits) ---
-            i.SetButton(0, UnityEngine.Input.GetKey(KeyCode.W));
-            i.SetButton(1, UnityEngine.Input.GetKey(KeyCode.S));
-            i.SetButton(2, UnityEngine.Input.GetKey(KeyCode.A));
-            i.SetButton(3, UnityEngine.Input.GetKey(KeyCode.D));
-            i.SetButton(4, UnityEngine.Input.GetKey(KeyCode.Space));          // Jump
-            i.SetButton(5, UnityEngine.Input.GetMouseButton(0));              // Fire
-            i.SetButton(6, UnityEngine.Input.GetMouseButton(1));              // Alt-fire
-            i.SetButton(7, UnityEngine.Input.GetKey(KeyCode.LeftShift));      // Sprint
+            // -------- digital buttons (bits 0-7) --------
+            i.SetButton(0, UnityEngine.Input.GetKey(KeyCode.W));          // forward
+            i.SetButton(1, UnityEngine.Input.GetKey(KeyCode.S));          // back
+            i.SetButton(2, UnityEngine.Input.GetKey(KeyCode.A));          // left
+            i.SetButton(3, UnityEngine.Input.GetKey(KeyCode.D));          // right
+            i.SetButton(4, UnityEngine.Input.GetMouseButton(0));          // LMB  (jump / fire)
+            i.SetButton(5, UnityEngine.Input.GetKey(KeyCode.Space));      // Space (alt-fire)
+            i.SetButton(6, UnityEngine.Input.GetMouseButton(1));          // RMB
+            i.SetButton(7, UnityEngine.Input.GetKey(KeyCode.LeftShift));  // sprint
 
-            // --- signed 8-bit axes ---
-            i.HatX = (sbyte)Mathf.RoundToInt(Mathf.Clamp(UnityEngine.Input.GetAxisRaw("Horizontal") * 127, -128, 127));
-            i.HatY = (sbyte)Mathf.RoundToInt(Mathf.Clamp(UnityEngine.Input.GetAxisRaw("Vertical") * 127, -128, 127));
+            // -------- signed 8-bit axes --------
+            i.HatX = (sbyte)Mathf.RoundToInt(
+                         Mathf.Clamp(UnityEngine.Input.GetAxisRaw("Horizontal") * 127, -128, 127));
+            i.HatY = (sbyte)Mathf.RoundToInt(
+                         Mathf.Clamp(UnityEngine.Input.GetAxisRaw("Vertical") * 127, -128, 127));
 
             // coarse mouse delta (scaled down)
             i.Mdx = (sbyte)Mathf.Clamp(UnityEngine.Input.GetAxisRaw("Mouse X") * 10, -128, 127);
@@ -37,13 +40,15 @@ namespace LowFive.Core.Input
             return i;
         }
 
-        // For today�s manual sanity check we just sample every Update.
+        /*──────────────────────────────────────────────*/
         void Update()
         {
             ReadCurrent();
+
 #if UNITY_EDITOR
-            if (Time.frameCount % 60 == 0)   // spam once per second
-                Debug.Log($"[InputSampler] packed=0x{Current.packed:X16}");
+            // Spam once per second for sanity-check
+            if (Time.frameCount % 60 == 0)
+                Debug.Log($"[InputSampler] packed = 0x{Current.packed:X16}");
 #endif
         }
     }
