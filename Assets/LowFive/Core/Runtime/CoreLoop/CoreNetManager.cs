@@ -2,75 +2,99 @@
 using System;
 using UnityEngine;
 using LowFive.Core.Input;
-using LowFive.Core.CoreLoop;
+using LowFive.Core.Transport;
 
 namespace LowFive.Core.CoreLoop
 {
     /// <summary>
-    /// Local-only version of the deterministic net-loop.
-    /// Networking gets injected on Day 4.
+    /// Deterministic 60 Hz tick loop.
+    /// Day 4-1: now selects Host or Client at runtime and owns a transport.
     /// </summary>
-    [DisallowMultipleComponent]
     [DefaultExecutionOrder(-500)]
+    [DisallowMultipleComponent]
     public sealed class CoreNetManager : MonoBehaviour
     {
+        /*──────────── public API ─────────────────────*/
         public static CoreNetManager Instance { get; private set; }
 
-        // piping
-        [SerializeField] private InputSampler sampler;
+        public enum Mode { Host, Client }
+        public Mode mode { get; private set; } = Mode.Host;
 
-        // tick system
         public uint CurrentTick => _timer.tick;
-        private readonly TickTimer _timer = new();
 
-        // simple 256-entry ring buffer of inputs
+        /*──────────── inspector refs ─────────────────*/
+        [SerializeField] private InputSampler sampler;
+        [SerializeField] private ushort port = 7777;
+
+        /*──────────── internals ──────────────────────*/
+        private readonly TickTimer _timer = new();
+        private INetTransport _transport;
+
         private readonly LFInputStruct[] _inputRing = new LFInputStruct[256];
 
-        // expose read-only access for debug
-        public ReadOnlySpan<LFInputStruct> LastInputs => _inputRing;
-
-        /*── Unity lifecycle ──────────────────────────*/
+        /*──────────── lifecycle ──────────────────────*/
         void Awake()
         {
-            if (Instance != null)
-            {
-                Debug.LogError("CoreNetManager duplicate");
-                enabled = false;
-                return;
-            }
+            // singleton guard
+            if (Instance != null) { enabled = false; return; }
             Instance = this;
 
+            // find sampler if not linked
             if (sampler == null)
                 sampler = FindAnyObjectByType<InputSampler>();
-            if (sampler == null)
-                Debug.LogError("CoreNetManager: no InputSampler found.");
+
+            // host-or-client election
+            try
+            {
+                _transport = new UdpTransport();
+                _transport.StartServer(port);
+                mode = Mode.Host;
+                Debug.Log($"[CoreNetMgr] Host mode on :{port}");
+            }
+            catch (Exception)
+            {
+                _transport = new UdpTransport();
+                _transport.StartClient("127.0.0.1", port);
+                mode = Mode.Client;
+                Debug.Log($"[CoreNetMgr] Client mode → 127.0.0.1:{port}");
+            }
         }
 
         void OnDestroy()
         {
+            _transport?.Shutdown();
             if (Instance == this) Instance = null;
         }
 
-        /*── Main update ──────────────────────────────*/
+        /*──────────── main Update ────────────────────*/
         void Update()
         {
+            // 1) service network (no handlers yet – stub)
+            _transport?.Poll(OnData);
+
+            // 2) fixed-tick simulation
             float dt = Time.unscaledDeltaTime;
 
-            // first call consumes this frame's delta-time
             if (!_timer.Step(dt))
                 return;
 
-            // drain any extra ticks without re-adding dt
             do
             {
                 var inp = sampler.Current;
                 _inputRing[_timer.tick & 0xFF] = inp;
+
                 Tick?.Invoke(_timer.tick, inp);
             }
-            while (_timer.Step(0f));   // pass 0 so we only drain
+            while (_timer.Step(0f));   // drain extra ticks without re-adding dt
         }
 
-        /*── Public events ────────────────────────────*/
+        /*──────────── networking stub ───────────────*/
+        private void OnData(ReadOnlySpan<byte> data)
+        {
+            // Task 4-2 will decode packets here
+        }
+
+        /*──────────── public event ───────────────────*/
         public delegate void TickHandler(uint tick, LFInputStruct input);
         public event TickHandler Tick;
     }
