@@ -1,4 +1,4 @@
-// Assets/LowFive/Core/Runtime/CoreLoop/CubeMotor.cs
+﻿// Assets/LowFive/Core/Runtime/CoreLoop/CubeMotor.cs
 using UnityEngine;
 using LowFive.Core.CoreLoop;
 using LowFive.Core.Input;
@@ -6,20 +6,12 @@ using LowFive.Core.Input;
 [RequireComponent(typeof(Collider))]
 public sealed class CubeMotor : MonoBehaviour
 {
-    private void OnEnable()
-    {
-        CoreNetManager.Instance.Tick += OnTick;
-    }
+    /* ───────── config ───────── */
+    private const float SPEED = 1f;          // units / second
 
-    private void OnDisable()
+    /* ───────── public sim helper (used by host) ───────── */
+    public static Vector3 Simulate(Vector3 startPos, LFInputStruct inp)
     {
-        if (CoreNetManager.Instance != null)
-            CoreNetManager.Instance.Tick -= OnTick;
-    }
-
-    private void OnTick(uint _, LFInputStruct inp)
-    {
-        const float speed = 1f;                 // units per second
         Vector3 delta = Vector3.zero;
 
         if (inp.W()) delta += Vector3.forward;
@@ -27,11 +19,29 @@ public sealed class CubeMotor : MonoBehaviour
         if (inp.A()) delta += Vector3.left;
         if (inp.D()) delta += Vector3.right;
 
-        delta.Normalize();                      // diagonal = 1� speed
-        delta *= speed * TickTimer.SECONDS_PER_TICK;
+        delta.Normalize();                               // diagonal still 1×
+        delta *= SPEED * TickTimer.SECONDS_PER_TICK;
 
-        if (inp.LMB()) delta += Vector3.up;     // simple 1-unit hop
+        if (inp.LMB()) delta += Vector3.up;              // 1-unit jump
 
-        transform.position += delta;
+        return startPos + delta;
+    }
+
+    /* ───────── live instance movement ───────── */
+    void OnEnable()
+    {
+        if (CoreNetManager.Instance != null)
+            CoreNetManager.Instance.Tick += OnTick;
+    }
+
+    void OnDisable()
+    {
+        if (CoreNetManager.Instance != null)
+            CoreNetManager.Instance.Tick -= OnTick;
+    }
+
+    void OnTick(uint tick, LFInputStruct inp)
+    {
+        transform.position = Simulate(transform.position, inp);
     }
 }
