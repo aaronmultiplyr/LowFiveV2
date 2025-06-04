@@ -1,20 +1,25 @@
 ﻿// Assets/LowFive/Core/Runtime/CoreLoop/CoreNetManager.cs
 using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
 using UnityEngine;
 using LowFive.Core.Input;
 using LowFive.Core.Transport;
+using UnityEngine.SocialPlatforms;
 
 namespace LowFive.Core.CoreLoop
 {
     /// <summary>
-    /// Deterministic 60 Hz tick loop.
-    /// Day 4-1: now selects Host or Client at runtime and owns a transport.
+    /// Deterministic 60 Hz lock-step manager.
+    /// • Elects Host/Client at runtime (bind-or-connect port 7777)  
+    /// • Handles HELLO / ACK_ID handshake and keeps a per-peer registry  
+    /// • Local tick loop still runs even before remote inputs are wired
     /// </summary>
     [DefaultExecutionOrder(-500)]
     [DisallowMultipleComponent]
     public sealed class CoreNetManager : MonoBehaviour
     {
-        /*──────────── public API ─────────────────────*/
+        /* ────────── public API ────────── */
         public static CoreNetManager Instance { get; private set; }
 
         public enum Mode { Host, Client }
@@ -22,41 +27,53 @@ namespace LowFive.Core.CoreLoop
 
         public uint CurrentTick => _timer.tick;
 
-        /*──────────── inspector refs ─────────────────*/
+        /* ────────── inspector ─────────── */
         [SerializeField] private InputSampler sampler;
         [SerializeField] private ushort port = 7777;
 
-        /*──────────── internals ──────────────────────*/
+        /* ────────── internals ─────────── */
         private readonly TickTimer _timer = new();
         private INetTransport _transport;
 
-        private readonly LFInputStruct[] _inputRing = new LFInputStruct[256];
+        // peerId (byte) → state   ; host puts itself in id 0
+        private readonly Dictionary<byte, PeerState> _peers = new();
+        private byte _nextPeerId = 1;        // host assigns 1..255
 
-        /*──────────── lifecycle ──────────────────────*/
+        /* ────────── Unity lifecycle ───── */
         void Awake()
         {
-            // singleton guard
             if (Instance != null) { enabled = false; return; }
             Instance = this;
 
-            // find sampler if not linked
             if (sampler == null)
                 sampler = FindAnyObjectByType<InputSampler>();
 
-            // host-or-client election
+            // Host-or-Client election
             try
             {
                 _transport = new UdpTransport();
                 _transport.StartServer(port);
                 mode = Mode.Host;
                 Debug.Log($"[CoreNetMgr] Host mode on :{port}");
+                _peers[0] = new PeerState { id = 0 };            // self
             }
-            catch (Exception)
+            catch
             {
                 _transport = new UdpTransport();
                 _transport.StartClient("127.0.0.1", port);
                 mode = Mode.Client;
                 Debug.Log($"[CoreNetMgr] Client mode → 127.0.0.1:{port}");
+            }
+        }
+
+        void Start()
+        {
+            // Client sends initial HELLO once transport is up
+            if (mode == Mode.Client)
+            {
+                Span<byte> pkt = NetPacket.Tiny(NetPacket.HELLO, 1, out _);
+                _transport.Send(pkt, SendChannel.Unreliable);
+                Debug.Log("[CoreNetMgr] Sent HELLO");
             }
         }
 
@@ -66,35 +83,66 @@ namespace LowFive.Core.CoreLoop
             if (Instance == this) Instance = null;
         }
 
-        /*──────────── main Update ────────────────────*/
+        /* ────────── main Update ───────── */
         void Update()
         {
-            // 1) service network (no handlers yet – stub)
+            // 1) pump network
             _transport?.Poll(OnData);
 
-            // 2) fixed-tick simulation
+            // 2) deterministic tick
             float dt = Time.unscaledDeltaTime;
-
-            if (!_timer.Step(dt))
-                return;
+            if (!_timer.Step(dt)) return;
 
             do
             {
                 var inp = sampler.Current;
-                _inputRing[_timer.tick & 0xFF] = inp;
+
+                // store local input in ring for id 0
+                if (_peers.TryGetValue(0, out var self))
+                    self.ring[_timer.tick & 0xFF] = inp;
 
                 Tick?.Invoke(_timer.tick, inp);
             }
-            while (_timer.Step(0f));   // drain extra ticks without re-adding dt
+            while (_timer.Step(0f));   // drain extra ticks
         }
 
-        /*──────────── networking stub ───────────────*/
+        /* ────────── packet handler ────── */
         private void OnData(ReadOnlySpan<byte> data)
         {
-            // Task 4-2 will decode packets here
+            if (data.Length == 0) return;
+
+            switch (data[0])
+            {
+                case NetPacket.HELLO:
+                    if (mode == Mode.Host) HandleHello();
+                    break;
+
+                case NetPacket.ACK_ID:
+                    if (mode == Mode.Client && data.Length >= 2)
+                    {
+                        byte id = data[1];
+                        _peers[id] = new PeerState { id = id };
+                        Debug.Log($"[CoreNetMgr] Got peer id = {id}");
+                    }
+                    break;
+
+                    /* INPUT / SNAP handled in upcoming tasks */
+            }
         }
 
-        /*──────────── public event ───────────────────*/
+        private void HandleHello()
+        {
+            byte peerId = _nextPeerId++;
+            _peers[peerId] = new PeerState { id = peerId };
+            Debug.Log($"[CoreNetMgr] Client joined → id {peerId}");
+
+            // send ACK_ID back
+            Span<byte> pkt = NetPacket.Tiny(NetPacket.ACK_ID, 2, out _);
+            pkt[1] = peerId;
+            _transport.Send(pkt, SendChannel.Unreliable);
+        }
+
+        /* ────────── tick event ─────────── */
         public delegate void TickHandler(uint tick, LFInputStruct input);
         public event TickHandler Tick;
     }
