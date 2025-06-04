@@ -11,6 +11,7 @@ namespace LowFive.Core.CoreLoop
     /// Networking gets injected on Day 4.
     /// </summary>
     [DisallowMultipleComponent]
+    [DefaultExecutionOrder(-500)]
     public sealed class CoreNetManager : MonoBehaviour
     {
         public static CoreNetManager Instance { get; private set; }
